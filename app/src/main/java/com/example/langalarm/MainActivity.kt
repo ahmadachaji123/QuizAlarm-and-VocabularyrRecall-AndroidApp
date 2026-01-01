@@ -27,6 +27,7 @@ import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.List
 import androidx.compose.material.icons.filled.MusicNote
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.School
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -52,27 +53,31 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         
+        // Ensure screen turns on and stays on for the alarm
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {
+            setShowWhenLocked(true)
+            setTurnScreenOn(true)
+        }
+        
+        // This is still needed for older versions or as a fallback
+        window.addFlags(
+            WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON or
+            WindowManager.LayoutParams.FLAG_ALLOW_LOCK_WHILE_SCREEN_ON or
+            WindowManager.LayoutParams.FLAG_SHOW_WHEN_LOCKED or
+            WindowManager.LayoutParams.FLAG_TURN_SCREEN_ON
+        )
+
         val scope = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.Main)
         scope.launch {
             wordsState.value = WordRepository.loadActiveWords(this@MainActivity)
         }
-        
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {
-            setShowWhenLocked(true)
-            setTurnScreenOn(true)
-        } else {
-            window.addFlags(
-                WindowManager.LayoutParams.FLAG_SHOW_WHEN_LOCKED or
-                WindowManager.LayoutParams.FLAG_TURN_SCREEN_ON
-            )
-        }
-        window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
 
         enableEdgeToEdge()
         loadAlarms()
         checkNotificationPermission()
 
-        val startQuizNow = intent.getBooleanExtra("START_QUIZ", false)
+        // Handle the intent that started this activity
+        handleIntent(intent)
 
         setContent {
             LangalarmTheme {
@@ -81,6 +86,9 @@ class MainActivity : ComponentActivity() {
                     contentWindowInsets = WindowInsets.systemBars
                 ) { innerPadding ->
                     Box(modifier = Modifier.padding(innerPadding)) {
+                        // Check if we are in "Quiz Mode" from the intent extras
+                        val startQuizNow = intent.getBooleanExtra("START_QUIZ", false)
+                        
                         if (startQuizNow) {
                             startQuiz()
                         } else {
@@ -90,22 +98,56 @@ class MainActivity : ComponentActivity() {
                             var showAlarmEditor by remember { mutableStateOf(false) }
                             var editingAlarm by remember { mutableStateOf<Alarm?>(null) }
                             
+                            // State for Flash Cards
+                            var showFlashCardSetup by remember { mutableStateOf(false) }
+                            var showFlashCardSession by remember { mutableStateOf(false) }
+                            var flashCardTarget by remember { mutableStateOf(10) }
+                            var flashCardMaxAttempts by remember { mutableStateOf(2) }
+                            
+                            val scope = rememberCoroutineScope()
+                            
                             // Back Navigation Logic
-                            BackHandler(enabled = showSettings || showDeckManager || showSoundManager || showAlarmEditor) {
+                            BackHandler(enabled = showSettings || showDeckManager || showSoundManager || showAlarmEditor || showFlashCardSetup || showFlashCardSession) {
                                 if (showAlarmEditor) {
                                     showAlarmEditor = false
                                 } else if (showSettings) {
                                     showSettings = false
                                 } else if (showDeckManager) {
                                     showDeckManager = false
+                                    // Reload words when coming back from deck manager in case deck changed
+                                    scope.launch { wordsState.value = WordRepository.loadActiveWords(this@MainActivity) }
                                 } else if (showSoundManager) {
                                     showSoundManager = false
+                                } else if (showFlashCardSession) {
+                                    showFlashCardSession = false
+                                    showFlashCardSetup = true // Go back to setup, or main? Usually setup.
+                                } else if (showFlashCardSetup) {
+                                    showFlashCardSetup = false
                                 }
                             }
 
                             when {
-                                showDeckManager -> DeckManagerScreen(onBack = { showDeckManager = false }) 
+                                showDeckManager -> DeckManagerScreen(onBack = { 
+                                    showDeckManager = false 
+                                    // Reload words when coming back from deck manager
+                                    scope.launch { wordsState.value = WordRepository.loadActiveWords(this@MainActivity) }
+                                }) 
                                 showSoundManager -> SoundManagerScreen(onBack = { showSoundManager = false })
+                                showFlashCardSession -> FlashCardSessionScreen(
+                                    words = wordsState.value,
+                                    targetCorrect = flashCardTarget,
+                                    maxWrongAttempts = flashCardMaxAttempts,
+                                    onSessionCompleted = { showFlashCardSession = false; showFlashCardSetup = false },
+                                    onBack = { showFlashCardSession = false; showFlashCardSetup = true }
+                                )
+                                showFlashCardSetup -> FlashCardSetupScreen(
+                                    onStartSession = { target, maxAttempts ->
+                                        flashCardTarget = target
+                                        flashCardMaxAttempts = maxAttempts
+                                        showFlashCardSession = true
+                                    },
+                                    onBack = { showFlashCardSetup = false }
+                                )
                                 else -> {
                                     MainScreen(
                                         alarms = alarms,
@@ -130,7 +172,12 @@ class MainActivity : ComponentActivity() {
                                         onDeleteAlarmClick = { alarm -> deleteAlarm(alarm) },
                                         onSettingsClick = { showSettings = true },
                                         onDecksClick = { showDeckManager = true },
-                                        onSoundsClick = { showSoundManager = true }
+                                        onSoundsClick = { showSoundManager = true },
+                                        onFlashCardsClick = { 
+                                            // Reload words before starting flash cards to ensure latest deck
+                                            scope.launch { wordsState.value = WordRepository.loadActiveWords(this@MainActivity) }
+                                            showFlashCardSetup = true 
+                                        }
                                     )
 
                                     if (showSettings) {
@@ -171,6 +218,56 @@ class MainActivity : ComponentActivity() {
                     }
                 }
             }
+        }
+    }
+    
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent) // Update the intent for the activity
+        handleIntent(intent)
+        // Re-compose the content to reflect the new intent state (e.g. switch to quiz mode)
+        setContent {
+            LangalarmTheme {
+                Scaffold(
+                    modifier = Modifier.fillMaxSize(),
+                    contentWindowInsets = WindowInsets.systemBars
+                ) { innerPadding ->
+                    Box(modifier = Modifier.padding(innerPadding)) {
+                        val startQuizNow = intent.getBooleanExtra("START_QUIZ", false)
+                        if (startQuizNow) {
+                             startQuiz()
+                        } else {
+                            // Fallback to normal UI if needed, or recreate the MainScreen logic here
+                            // For simplicity, reusing the logic from onCreate but we must ensure state is preserved
+                             var showSettings by remember { mutableStateOf(false) }
+                             // ... rest of the main screen logic ...
+                             // A better approach for a real app would be to hoist this state to a ViewModel
+                             // For this fix, we will just reload the content
+                             
+                             // Since we are inside onNewIntent, we can just trigger a recomposition or rely on state.
+                             // However, Compose doesn't automatically recompose on intent change unless we observe something.
+                             // The simplest way here is to let setContent re-run.
+                             val mainActivity = this@MainActivity
+                             mainActivity.recreate() // Force recreation to handle the new intent cleanly in onCreate
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private fun handleIntent(intent: Intent?) {
+        if (intent?.getBooleanExtra("START_QUIZ", false) == true) {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {
+                setShowWhenLocked(true)
+                setTurnScreenOn(true)
+            }
+            window.addFlags(
+                WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON or
+                WindowManager.LayoutParams.FLAG_ALLOW_LOCK_WHILE_SCREEN_ON or
+                WindowManager.LayoutParams.FLAG_SHOW_WHEN_LOCKED or
+                WindowManager.LayoutParams.FLAG_TURN_SCREEN_ON
+            )
         }
     }
     
@@ -225,6 +322,8 @@ class MainActivity : ComponentActivity() {
         val prefs = getSharedPreferences("app_settings", MODE_PRIVATE)
         val requiredCorrect = prefs.getInt("required_correct", 3) 
         val bufferSize = prefs.getInt("buffer_size", 3)
+        // Load max trials from settings, default 2
+        val maxTrials = prefs.getInt("max_trials", 2)
 
         val currentWords = wordsState.value
         if (currentWords.isEmpty()) {
@@ -239,9 +338,12 @@ class MainActivity : ComponentActivity() {
                 words = currentWords,
                 requiredCorrect = requiredCorrect,
                 bufferSize = bufferSize,
+                maxWrongAttempts = maxTrials,
                 onQuizCompleted = {
                     stopAlarmService()
                     window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+                    // If we were started just for the quiz, finish. Otherwise go back to main.
+                    // Checking if we are the task root is a heuristic.
                     finish()
                 }
             )
@@ -386,6 +488,7 @@ fun SettingsDialog(
     
     var requiredCorrectText by remember { mutableStateOf(prefs.getInt("required_correct", 3).toString()) }
     var bufferSizeText by remember { mutableStateOf(prefs.getInt("buffer_size", 3).toString()) }
+    var maxTrialsText by remember { mutableStateOf(prefs.getInt("max_trials", 2).toString()) }
 
     Dialog(onDismissRequest = onDismiss) {
         Card(
@@ -426,7 +529,37 @@ fun SettingsDialog(
 
                 Spacer(modifier = Modifier.height(16.dp))
 
-                // Buffer Size
+                // Max Trials (Moved to 2nd Position)
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    OutlinedTextField(
+                        value = maxTrialsText,
+                        onValueChange = { maxTrialsText = it },
+                        label = { Text("Max Wrong Attempts") },
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                        singleLine = true,
+                        modifier = Modifier.weight(1f)
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        text = "Min: 1",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                
+                Text(
+                    text = "Number of wrong attempts allowed before skipping to the next word.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.align(Alignment.Start).padding(top = 4.dp)
+                )
+
+                Spacer(modifier = Modifier.height(16.dp))
+
+                // Buffer Size (Moved to 3rd Position)
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
                     modifier = Modifier.fillMaxWidth()
@@ -448,7 +581,7 @@ fun SettingsDialog(
                 }
                 
                 Text(
-                    text = "The buffer size determines how many unique words must be shown before a word can repeat. A larger buffer means more variety.",
+                    text = "The buffer size determines how many unique words must be shown before a word can repeat.",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.align(Alignment.Start).padding(top = 4.dp)
@@ -476,13 +609,16 @@ fun SettingsDialog(
                     Button(onClick = {
                         val correct = requiredCorrectText.toIntOrNull() ?: 3
                         val buffer = bufferSizeText.toIntOrNull() ?: 3
+                        val trials = maxTrialsText.toIntOrNull() ?: 2
                         
                         val finalCorrect = correct.coerceAtLeast(1)
                         val finalBuffer = buffer.coerceAtLeast(3)
+                        val finalTrials = trials.coerceAtLeast(1)
 
                         prefs.edit()
                             .putInt("required_correct", finalCorrect)
                             .putInt("buffer_size", finalBuffer)
+                            .putInt("max_trials", finalTrials)
                             .apply()
                         
                         onDismiss()
@@ -512,6 +648,7 @@ fun LanguageQuestionScreen(
     words: List<WordItem>,
     requiredCorrect: Int,
     bufferSize: Int,
+    maxWrongAttempts: Int,
     onQuizCompleted: () -> Unit
 ) {
     val context = LocalContext.current
@@ -524,12 +661,26 @@ fun LanguageQuestionScreen(
 
     var userAnswer by remember { mutableStateOf("") }
     var result by remember { mutableStateOf<String?>(null) }
+    
+    // New state for tracking consecutive wrong attempts for the current word
+    var consecutiveWrongCount by remember { mutableStateOf(0) }
 
     Column(modifier = Modifier.padding(24.dp)) {
         Text(text = "Target: $requiredCorrect correct answers", style = MaterialTheme.typography.bodyMedium)
         Spacer(modifier = Modifier.height(16.dp))
         
-        Text(text = "What is the meaning of:")
+        // Show remaining trials if user has started making mistakes
+        if (consecutiveWrongCount > 0) {
+            val remaining = maxWrongAttempts - consecutiveWrongCount
+            val remainingText = if (remaining > 0) "$remaining trial(s) left" else "Last trial!"
+            Text(
+                text = remainingText,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.error
+            )
+        }
+        
+        // Removed "What is the meaning of:" phrase
         Text(
             text = currentWord.question,
             style = MaterialTheme.typography.headlineSmall,
@@ -557,6 +708,8 @@ fun LanguageQuestionScreen(
 
                     recentWords.add(currentWord)
                     if (recentWords.size > bufferSize) recentWords.removeAt(0)
+                    
+                    consecutiveWrongCount = 0 // Reset wrong count
 
                     if (correctCount >= requiredCorrect) {
                         onQuizCompleted()
@@ -565,12 +718,52 @@ fun LanguageQuestionScreen(
                         userAnswer = ""
                     }
                 } else {
-                    result = "Wrong ❌ Try again"
-                    currentWord.weight += 2
+                    consecutiveWrongCount++
                     
-                    val scope = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.IO)
-                    scope.launch {
-                         WordRepository.saveProgress(context, words)
+                    if (consecutiveWrongCount >= maxWrongAttempts) {
+                        // Max attempts reached: skip this word and don't penalize or count as correct
+                        val skippedAnswer = currentWord.answer
+                        val skippedQuestion = currentWord.question
+                        
+                        // Increase weight slightly, but cap at 10
+                        currentWord.weight = (currentWord.weight + 1).coerceAtMost(10)
+                        
+                        val scope = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.IO)
+                        scope.launch {
+                             WordRepository.saveProgress(context, words)
+                        }
+                        
+                        // Add to recent words to prevent immediate re-appearance if buffer allows
+                        recentWords.add(currentWord)
+                        if (recentWords.size > bufferSize) recentWords.removeAt(0)
+                        
+                        // Pick a new word
+                        val nextWord = pickWeightedWord(words, recentWords)
+                        
+                        // Force retry loop to find a different word
+                        var retries = 0
+                        var tempWord = nextWord
+                        // Check against the OLD currentWord, not the new 'nextWord' assigned to tempWord initially
+                        // We want to make sure tempWord != currentWord (the skipped word)
+                        while (tempWord == currentWord && words.size > 1 && retries < 10) {
+                            tempWord = pickWeightedWord(words, recentWords)
+                            retries++
+                        }
+                        
+                        currentWord = tempWord
+                        userAnswer = ""
+                        consecutiveWrongCount = 0
+                        result = "Skipped: '$skippedQuestion' was '$skippedAnswer'"
+                    } else {
+                        // Normal wrong answer
+                        result = "Wrong ❌ Try again"
+                        // Increase weight but cap at 10
+                        currentWord.weight = (currentWord.weight + 2).coerceAtMost(10)
+                        
+                        val scope = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.IO)
+                        scope.launch {
+                             WordRepository.saveProgress(context, words)
+                        }
                     }
                 }
             },
@@ -582,7 +775,7 @@ fun LanguageQuestionScreen(
         result?.let {
             Text(
                 text = it,
-                color = if (it.contains("Correct")) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error,
+                color = if (it.contains("Correct") || it.contains("Skipped")) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error,
                 modifier = Modifier.padding(top = 16.dp)
             )
         }
@@ -603,7 +796,8 @@ fun MainScreen(
     onDeleteAlarmClick: (Alarm) -> Unit,
     onSettingsClick: () -> Unit,
     onDecksClick: () -> Unit,
-    onSoundsClick: () -> Unit
+    onSoundsClick: () -> Unit,
+    onFlashCardsClick: () -> Unit // New callback
 ) {
     Column(
         modifier = Modifier
@@ -617,6 +811,9 @@ fun MainScreen(
         ) {
             Text(text = "Your Alarms", style = MaterialTheme.typography.titleLarge)
             Row {
+                IconButton(onClick = onFlashCardsClick) { // Added Flash Cards Icon
+                    Icon(Icons.Default.School, contentDescription = "Flash Cards")
+                }
                 IconButton(onClick = onDecksClick) {
                     Icon(Icons.Default.List, contentDescription = "Manage Decks")
                 }

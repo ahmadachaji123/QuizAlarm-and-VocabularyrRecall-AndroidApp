@@ -32,11 +32,9 @@ object AlarmScheduler {
         val triggerTime = alarm.getNextAlarmTime()
 
         try {
-            alarmManager.setExactAndAllowWhileIdle(
-                AlarmManager.RTC_WAKEUP,
-                triggerTime,
-                pendingIntent
-            )
+            // Use setAlarmClock for maximum reliability on newer Android versions
+            val alarmClockInfo = AlarmManager.AlarmClockInfo(triggerTime, pendingIntent)
+            alarmManager.setAlarmClock(alarmClockInfo, pendingIntent)
         } catch (e: SecurityException) {
             e.printStackTrace()
             Toast.makeText(context, "Permission denied to set alarm", Toast.LENGTH_SHORT).show()

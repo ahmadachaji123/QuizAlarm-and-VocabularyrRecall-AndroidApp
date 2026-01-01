@@ -35,7 +35,8 @@ class AlarmReceiver : BroadcastReceiver() {
             PowerManager.PARTIAL_WAKE_LOCK or PowerManager.ACQUIRE_CAUSES_WAKEUP,
             "LangAlarm:WakeLock"
         )
-        wakeLock.acquire(3000) // Hold for 3 seconds
+        // Increase hold time to ensure service has enough time to start and acquire its own lock
+        wakeLock.acquire(10 * 1000L) // Hold for 10 seconds
 
         // Start the Alarm Service to play sound and show notification
         val serviceIntent = Intent(context, AlarmService::class.java)
@@ -46,9 +47,8 @@ class AlarmReceiver : BroadcastReceiver() {
             context.startService(serviceIntent)
         }
         
-        // Release the lock (though the timeout handles it safely)
-        if (wakeLock.isHeld) {
-            wakeLock.release()
-        }
+        // We do NOT release the lock immediately here. 
+        // The timeout (10s) will handle it, or we rely on the Service to pick up.
+        // Releasing it immediately might kill the process before Service.onCreate runs.
     }
 }

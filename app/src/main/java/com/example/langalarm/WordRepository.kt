@@ -64,7 +64,9 @@ object WordRepository {
         currentEntities.forEach { entity ->
             val updatedWord = words.find { it.question == entity.question }
             if (updatedWord != null && updatedWord.weight != entity.weight) {
-                db.wordDao().updateWord(entity.copy(weight = updatedWord.weight))
+                // Ensure weight is within bounds before saving
+                val finalWeight = updatedWord.weight.coerceIn(0, 10)
+                db.wordDao().updateWord(entity.copy(weight = finalWeight))
             }
         }
     }
@@ -99,8 +101,10 @@ object WordRepository {
     // --- Word Management ---
 
     suspend fun addWord(context: Context, deckId: Int, question: String, answer: String, weight: Int = 5) {
+        // Ensure initial weight is within bounds
+        val finalWeight = weight.coerceIn(0, 10)
         AppDatabase.getDatabase(context).wordDao().insertWord(
-            WordEntity(deckId = deckId, question = question, answer = answer, weight = weight)
+            WordEntity(deckId = deckId, question = question, answer = answer, weight = finalWeight)
         )
     }
 
@@ -109,7 +113,9 @@ object WordRepository {
     }
 
     suspend fun updateWord(context: Context, word: WordEntity) {
-        AppDatabase.getDatabase(context).wordDao().updateWord(word)
+        // Ensure updated weight is within bounds
+        val finalWeight = word.weight.coerceIn(0, 10)
+        AppDatabase.getDatabase(context).wordDao().updateWord(word.copy(weight = finalWeight))
     }
 
     // --- CSV Import/Export ---

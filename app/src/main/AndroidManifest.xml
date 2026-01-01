@@ -11,6 +11,7 @@
     <uses-permission android:name="android.permission.VIBRATE"/>
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
+    <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
 
     <application
         android:allowBackup="true"
@@ -28,6 +29,7 @@
             android:label="@string/app_name"
             android:showOnLockScreen="true"
             android:turnScreenOn="true"
+            android:launchMode="singleTop"
             android:theme="@style/Theme.Langalarm">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
