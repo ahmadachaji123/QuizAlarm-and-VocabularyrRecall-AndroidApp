@@ -132,7 +132,10 @@ fun DeckManagerScreen(
                 initialName = deckToRename!!.name,
                 onDismiss = { deckToRename = null },
                 onSave = { newName ->
-                    scope.launch { WordRepository.renameDeck(context, deckToRename!!, newName) }
+                    val currentDeck = deckToRename
+                    if (currentDeck != null) {
+                        scope.launch { WordRepository.renameDeck(context, currentDeck, newName) }
+                    }
                     deckToRename = null
                 }
             )
