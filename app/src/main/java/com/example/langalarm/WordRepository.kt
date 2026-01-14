@@ -4,6 +4,7 @@ import android.content.Context
 import android.net.Uri
 import com.example.langalarm.data.AppDatabase
 import com.example.langalarm.data.Deck
+import com.example.langalarm.data.DeckWithWordCount
 import com.example.langalarm.data.WordEntity
 import com.google.gson.Gson
 import com.google.gson.reflect.TypeToken
@@ -12,6 +13,13 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.withContext
 import java.io.BufferedReader
 import java.io.InputStreamReader
+
+enum class DuplicateAction {
+    Skip, Overwrite, KeepBoth
+}
+
+data class DuplicateWord(val newWord: WordEntity, val existingWord: WordEntity, var action: DuplicateAction = DuplicateAction.Skip)
+data class ImportPreview(val newWords: List<WordEntity>, val duplicates: List<DuplicateWord>)
 
 object WordRepository {
 
@@ -73,8 +81,8 @@ object WordRepository {
     
     // --- Deck Management ---
 
-    fun getAllDecks(context: Context): Flow<List<Deck>> {
-        return AppDatabase.getDatabase(context).deckDao().getAllDecks()
+    fun getDecksWithWordCount(context: Context): Flow<List<DeckWithWordCount>> {
+        return AppDatabase.getDatabase(context).deckDao().getDecksWithWordCount()
     }
 
     suspend fun createDeck(context: Context, name: String) {
@@ -112,6 +120,10 @@ object WordRepository {
         AppDatabase.getDatabase(context).wordDao().deleteWord(word)
     }
 
+    suspend fun deleteWords(context: Context, words: List<WordEntity>) {
+        AppDatabase.getDatabase(context).wordDao().deleteWords(words)
+    }
+
     suspend fun updateWord(context: Context, word: WordEntity) {
         // Ensure updated weight is within bounds
         val finalWeight = word.weight.coerceIn(0, 10)
@@ -120,33 +132,76 @@ object WordRepository {
 
     // --- CSV Import/Export ---
 
-    suspend fun importCsvToDeck(context: Context, deckId: Int, uri: Uri) {
-        withContext(Dispatchers.IO) {
+    suspend fun previewCsvImport(context: Context, deckId: Int, uri: Uri): ImportPreview {
+        return withContext(Dispatchers.IO) {
+            val db = AppDatabase.getDatabase(context)
             val contentResolver = context.contentResolver
+            val duplicates = mutableListOf<DuplicateWord>()
+            val newWords = mutableListOf<WordEntity>()
+
             contentResolver.openInputStream(uri)?.use { inputStream ->
                 BufferedReader(InputStreamReader(inputStream)).use { reader ->
-                    val words = mutableListOf<WordEntity>()
                     reader.lineSequence().forEach { line ->
                         val parts = line.split(",")
                         if (parts.size >= 2) {
                             val question = parts[0].trim()
                             val answer = parts[1].trim()
-                            
-                            // Check for weight in the 3rd column, default to 5
                             var weight = 5
                             if (parts.size >= 3) {
                                 weight = parts[2].trim().toIntOrNull() ?: 5
                             }
-                            // Enforce weight limits (0-10)
                             weight = weight.coerceIn(0, 10)
 
                             if (question.isNotEmpty() && answer.isNotEmpty()) {
-                                words.add(WordEntity(deckId = deckId, question = question, answer = answer, weight = weight))
+                                val newWord = WordEntity(deckId = deckId, question = question, answer = answer, weight = weight)
+                                val existingWord = db.wordDao().findWordByQuestion(deckId, question)
+                                if (existingWord != null) {
+                                    duplicates.add(DuplicateWord(newWord, existingWord))
+                                } else {
+                                    newWords.add(newWord)
+                                }
                             }
                         }
                     }
-                    AppDatabase.getDatabase(context).wordDao().insertWords(words)
                 }
+            }
+            ImportPreview(newWords, duplicates)
+        }
+    }
+
+    suspend fun finalizeImport(context: Context, newWords: List<WordEntity>, resolutions: List<DuplicateWord>) {
+        withContext(Dispatchers.IO) {
+            val db = AppDatabase.getDatabase(context)
+
+            // Insert all non-duplicate new words
+            if (newWords.isNotEmpty()) {
+                db.wordDao().insertWords(newWords)
+            }
+
+            val wordsToInsert = mutableListOf<WordEntity>()
+            val wordsToUpdate = mutableListOf<WordEntity>()
+
+            for (resolution in resolutions) {
+                when (resolution.action) {
+                    DuplicateAction.Overwrite -> {
+                        val wordToUpdate = resolution.existingWord.copy(
+                            answer = resolution.newWord.answer, 
+                            weight = resolution.newWord.weight
+                        )
+                        wordsToUpdate.add(wordToUpdate)
+                    }
+                    DuplicateAction.KeepBoth -> {
+                        wordsToInsert.add(resolution.newWord)
+                    }
+                    DuplicateAction.Skip -> { /* Do nothing */ }
+                }
+            }
+
+            if (wordsToInsert.isNotEmpty()) {
+                db.wordDao().insertWords(wordsToInsert)
+            }
+            if (wordsToUpdate.isNotEmpty()) {
+                wordsToUpdate.forEach { db.wordDao().updateWord(it) }
             }
         }
     }

@@ -11,6 +11,9 @@ interface WordDao {
     @Query("SELECT * FROM words WHERE deckId = :deckId")
     suspend fun getWordsByDeckIdSync(deckId: Int): List<WordEntity>
 
+    @Query("SELECT * FROM words WHERE deckId = :deckId AND question = :question")
+    suspend fun findWordByQuestion(deckId: Int, question: String): WordEntity?
+
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertWord(word: WordEntity)
 
@@ -22,6 +25,9 @@ interface WordDao {
 
     @Delete
     suspend fun deleteWord(word: WordEntity)
+
+    @Delete
+    suspend fun deleteWords(words: List<WordEntity>)
 
     @Update
     suspend fun updateWord(word: WordEntity)

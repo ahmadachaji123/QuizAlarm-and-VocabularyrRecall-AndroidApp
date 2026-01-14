@@ -26,6 +26,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.example.langalarm.data.Deck
+import com.example.langalarm.data.DeckWithWordCount
 import kotlinx.coroutines.launch
 
 @Composable
@@ -35,22 +36,32 @@ fun DeckManagerScreen(
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     
-    // State for decks
-    var decks by remember { mutableStateOf<List<Deck>>(emptyList()) }
-    
-    // State for viewing a specific deck
+    var decks by remember { mutableStateOf<List<DeckWithWordCount>>(emptyList()) }
     var viewingDeck by remember { mutableStateOf<Deck?>(null) }
-    
-    // Load decks
+    var importPreview by remember { mutableStateOf<ImportPreview?>(null) }
+
     LaunchedEffect(Unit) {
-        WordRepository.getAllDecks(context).collect {
+        WordRepository.getDecksWithWordCount(context).collect {
             decks = it
         }
     }
 
-    // Handle back press when viewing a deck
     BackHandler(enabled = viewingDeck != null) {
         viewingDeck = null
+    }
+
+    if (importPreview != null) {
+        DuplicateWordsDialog(
+            duplicates = importPreview!!.duplicates,
+            onDismiss = { importPreview = null },
+            onConfirm = { resolutions ->
+                scope.launch {
+                    WordRepository.finalizeImport(context, importPreview!!.newWords, resolutions)
+                    importPreview = null
+                    Toast.makeText(context, "Import complete!", Toast.LENGTH_SHORT).show()
+                }
+            }
+        )
     }
 
     if (viewingDeck != null) {
@@ -69,16 +80,17 @@ fun DeckManagerScreen(
                 verticalAlignment = Alignment.CenterVertically,
                 modifier = Modifier.fillMaxWidth()
             ) {
-                // Removed explicit Back button
                 Text("Manage Decks", style = MaterialTheme.typography.headlineSmall)
             }
 
             Spacer(modifier = Modifier.height(16.dp))
 
             LazyColumn(modifier = Modifier.weight(1f)) {
-                items(decks) { deck ->
+                items(decks) { deckWithCount ->
+                    val deck = deckWithCount.deck
                     DeckItem(
                         deck = deck,
+                        wordCount = deckWithCount.wordCount,
                         onActivate = { 
                             scope.launch { WordRepository.setActiveDeck(context, deck.id) }
                         },
@@ -93,13 +105,16 @@ fun DeckManagerScreen(
                         },
                         onImport = { uri ->
                             scope.launch { 
-                                WordRepository.importCsvToDeck(context, deck.id, uri) 
-                                Toast.makeText(context, "Imported!", Toast.LENGTH_SHORT).show()
+                                val preview = WordRepository.previewCsvImport(context, deck.id, uri)
+                                if (preview.duplicates.isNotEmpty()) {
+                                    importPreview = preview
+                                } else {
+                                    WordRepository.finalizeImport(context, preview.newWords, emptyList())
+                                    Toast.makeText(context, "Imported successfully!", Toast.LENGTH_SHORT).show()
+                                }
                             }
                         },
-                        onExport = {
-                            // Handled inside DeckItem via launcher
-                        }
+                        onExport = {}
                     )
                 }
             }
@@ -141,7 +156,6 @@ fun DeckManagerScreen(
             )
         }
 
-        // Capture the deck to delete in a local variable to prevent race condition
         val currentDeckToDelete = deckToDelete
         if (currentDeckToDelete != null) {
             AlertDialog(
@@ -172,6 +186,7 @@ fun DeckManagerScreen(
 @Composable
 fun DeckItem(
     deck: Deck,
+    wordCount: Int,
     onActivate: () -> Unit,
     onDeleteRequest: () -> Unit,
     onRenameRequest: () -> Unit,
@@ -182,14 +197,12 @@ fun DeckItem(
     val context = LocalContext.current
     val isDefault = deck.name == "Default Deck"
     
-    // Launcher for Import CSV
     val importLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenDocument()
     ) { uri: Uri? ->
         uri?.let { onImport(it) }
     }
     
-    // Launcher for Export CSV (Create Document)
     val exportLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.CreateDocument("text/csv")
     ) { uri: Uri? ->
@@ -243,7 +256,6 @@ fun DeckItem(
                         )
                     }
                     
-                    // Rename (Edit) Icon is now here, next to the name
                     IconButton(onClick = onRenameRequest) {
                         Icon(Icons.Default.Edit, contentDescription = "Rename")
                     }
@@ -255,6 +267,8 @@ fun DeckItem(
                     }
                 }
             }
+            
+            Text("Words: $wordCount", style = MaterialTheme.typography.bodySmall)
             
             Divider(modifier = Modifier.padding(vertical = 8.dp))
             
@@ -270,12 +284,10 @@ fun DeckItem(
                     Text("Export CSV")
                 }
                 
-                // View Content (Info) Icon is now here in the button row
                 IconButton(onClick = onViewContent) {
                     Icon(Icons.Default.Info, contentDescription = "View Content")
                 }
 
-                // Delete Button (Disabled for Default Deck)
                 IconButton(
                     onClick = onDeleteRequest,
                     enabled = !isDefault

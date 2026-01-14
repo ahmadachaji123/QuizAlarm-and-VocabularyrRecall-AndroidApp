@@ -22,5 +22,6 @@ data class WordEntity(
     val deckId: Int,
     val question: String,
     val answer: String,
-    var weight: Int = 1
+    var weight: Int = 1,
+    val createdAt: Long = System.currentTimeMillis()
 )

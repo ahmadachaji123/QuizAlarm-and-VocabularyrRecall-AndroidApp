@@ -1,13 +1,18 @@
 package com.example.langalarm
 
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.ArrowDropDown
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.SelectAll
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -18,7 +23,19 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import com.example.langalarm.data.WordEntity
 import kotlinx.coroutines.launch
+import java.text.Collator
+import java.util.Locale
 
+enum class SortType {
+    Alphabetical,
+    AlphabeticalReverse,
+    Weight,
+    WeightReverse,
+    Newest,
+    Oldest
+}
+
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun DeckContentScreen(
     deckId: Int,
@@ -28,11 +45,14 @@ fun DeckContentScreen(
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     var words by remember { mutableStateOf<List<WordEntity>>(emptyList()) }
+    var sortType by remember { mutableStateOf(SortType.Newest) }
+    var selectionMode by remember { mutableStateOf(false) }
+    val selectedWords = remember { mutableStateListOf<WordEntity>() }
 
     // Dialog States
     var showAddDialog by remember { mutableStateOf(false) }
     var wordToEdit by remember { mutableStateOf<WordEntity?>(null) }
-    var wordToDelete by remember { mutableStateOf<WordEntity?>(null) }
+    var showDeleteConfirmDialog by remember { mutableStateOf(false) }
 
     LaunchedEffect(deckId) {
         WordRepository.getDeckWords(context, deckId).collect {
@@ -40,38 +60,101 @@ fun DeckContentScreen(
         }
     }
 
+    val sortedWords = remember(words, sortType) {
+        val collator = Collator.getInstance(Locale.getDefault())
+        when (sortType) {
+            SortType.Alphabetical -> words.sortedWith(compareBy(collator) { it.question })
+            SortType.AlphabeticalReverse -> words.sortedWith(compareByDescending(collator) { it.question })
+            SortType.Weight -> words.sortedBy { it.weight }
+            SortType.WeightReverse -> words.sortedByDescending { it.weight }
+            SortType.Newest -> words.sortedByDescending { it.createdAt }
+            SortType.Oldest -> words.sortedBy { it.createdAt }
+        }
+    }
+
+    fun clearSelection() {
+        selectedWords.clear()
+        selectionMode = false
+    }
+
     Column(modifier = Modifier.fillMaxSize().padding(16.dp)) {
         Row(
             verticalAlignment = Alignment.CenterVertically,
-            modifier = Modifier.fillMaxWidth()
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween
         ) {
-            // Removed explicit Back button as requested
-            Text(text = "Deck: $deckName", style = MaterialTheme.typography.headlineSmall)
+            if (selectionMode) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    IconButton(onClick = { clearSelection() }) {
+                        Icon(Icons.Default.Close, contentDescription = "Close selection")
+                    }
+                    Text("${selectedWords.size} selected")
+                }
+                Row {
+                    IconButton(onClick = { 
+                        selectedWords.clear()
+                        selectedWords.addAll(words)
+                    }) {
+                        Icon(Icons.Default.SelectAll, contentDescription = "Select All")
+                    }
+                    IconButton(onClick = { 
+                        if (selectedWords.isNotEmpty()) {
+                            showDeleteConfirmDialog = true
+                        }
+                    }) {
+                        Icon(Icons.Default.Delete, contentDescription = "Delete selected")
+                    }
+                }
+            } else {
+                Text(text = "Deck: $deckName", style = MaterialTheme.typography.headlineSmall)
+            }
         }
 
         Spacer(modifier = Modifier.height(8.dp))
         
-        Text(
-            text = "Note: Higher weight means the word will appear more frequently in quizzes. Weight must be between 0 and 10.",
-            style = MaterialTheme.typography.bodySmall,
-            fontStyle = FontStyle.Italic,
-            color = MaterialTheme.colorScheme.secondary
-        )
+        if (!selectionMode) {
+            Text(
+                text = "Note: Higher weight means the word will appear more frequently in quizzes. Weight must be between 0 and 10.",
+                style = MaterialTheme.typography.bodySmall,
+                fontStyle = FontStyle.Italic,
+                color = MaterialTheme.colorScheme.secondary
+            )
+        }
+        
+        Spacer(modifier = Modifier.height(8.dp))
+
+        SortDropdown(sortType) { sortType = it }
 
         Spacer(modifier = Modifier.height(16.dp))
 
-        if (words.isEmpty()) {
+        if (sortedWords.isEmpty()) {
             Box(modifier = Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
                 Text("This deck is empty.")
             }
         } else {
             LazyColumn(modifier = Modifier.weight(1f)) {
-                items(words) { word ->
+                items(sortedWords) { word ->
+                    val isSelected = selectedWords.contains(word)
                     Card(
                         modifier = Modifier
                             .fillMaxWidth()
                             .padding(vertical = 4.dp)
-                            .clickable { wordToEdit = word },
+                            .combinedClickable(
+                                onClick = {
+                                    if (selectionMode) {
+                                        if (isSelected) selectedWords.remove(word) else selectedWords.add(word)
+                                    } else {
+                                        wordToEdit = word
+                                    }
+                                },
+                                onLongClick = {
+                                    if (!selectionMode) {
+                                        selectionMode = true
+                                        selectedWords.add(word)
+                                    }
+                                }
+                            ),
+                        colors = CardDefaults.cardColors(containerColor = if (isSelected) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceVariant)
                     ) {
                         Row(
                             modifier = Modifier.padding(16.dp).fillMaxWidth(),
@@ -86,9 +169,6 @@ fun DeckContentScreen(
                                     style = MaterialTheme.typography.bodySmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant
                                 )
-                            }
-                            IconButton(onClick = { wordToDelete = word }) {
-                                Icon(Icons.Default.Delete, contentDescription = "Delete")
                             }
                         }
                     }
@@ -137,17 +217,20 @@ fun DeckContentScreen(
         )
     }
 
-    val currentWordToDelete = wordToDelete
-    if (currentWordToDelete != null) {
+    if (showDeleteConfirmDialog) {
         AlertDialog(
-            onDismissRequest = { wordToDelete = null },
-            title = { Text("Delete Word?") },
-            text = { Text("Are you sure you want to delete this word? This action cannot be undone.") },
+            onDismissRequest = { showDeleteConfirmDialog = false },
+            title = { Text("Confirm Deletion") },
+            text = { Text("Are you sure you want to delete ${selectedWords.size} selected words? This action cannot be undone.") },
             confirmButton = {
                 Button(
                     onClick = {
-                        scope.launch { WordRepository.deleteWord(context, currentWordToDelete) }
-                        wordToDelete = null
+                        val wordsToDelete = selectedWords.toList()
+                        scope.launch {
+                            WordRepository.deleteWords(context, wordsToDelete)
+                        }
+                        showDeleteConfirmDialog = false
+                        clearSelection()
                     },
                     colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)
                 ) {
@@ -155,11 +238,30 @@ fun DeckContentScreen(
                 }
             },
             dismissButton = {
-                TextButton(onClick = { wordToDelete = null }) {
+                TextButton(onClick = { showDeleteConfirmDialog = false }) {
                     Text("Cancel")
                 }
             }
         )
+    }
+}
+
+@Composable
+fun SortDropdown(sortType: SortType, onSortChange: (SortType) -> Unit) {
+    var expanded by remember { mutableStateOf(false) }
+    Box {
+        OutlinedButton(onClick = { expanded = true }) {
+            Text("Sort by: ${sortType.name}")
+            Icon(Icons.Default.ArrowDropDown, contentDescription = "Sort")
+        }
+        DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+            SortType.values().forEach { type ->
+                DropdownMenuItem(onClick = { 
+                    onSortChange(type)
+                    expanded = false
+                }, text = { Text(type.name) })
+            }
+        }
     }
 }
 

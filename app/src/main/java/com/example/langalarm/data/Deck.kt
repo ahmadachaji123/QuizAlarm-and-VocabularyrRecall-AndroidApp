@@ -1,5 +1,6 @@
 package com.example.langalarm.data
 
+import androidx.room.Embedded
 import androidx.room.Entity
 import androidx.room.PrimaryKey
 
@@ -8,4 +9,10 @@ data class Deck(
     @PrimaryKey(autoGenerate = true) val id: Int = 0,
     val name: String,
     val isActive: Boolean = false // Only one deck can be active at a time
+)
+
+data class DeckWithWordCount(
+    @Embedded
+    val deck: Deck,
+    val wordCount: Int
 )

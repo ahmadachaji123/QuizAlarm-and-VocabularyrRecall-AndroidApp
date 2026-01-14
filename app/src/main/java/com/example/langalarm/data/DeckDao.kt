@@ -5,6 +5,10 @@ import kotlinx.coroutines.flow.Flow
 
 @Dao
 interface DeckDao {
+    @Transaction
+    @Query("SELECT d.*, (SELECT COUNT(*) FROM words WHERE deckId = d.id) as wordCount FROM decks d")
+    fun getDecksWithWordCount(): Flow<List<DeckWithWordCount>>
+
     @Query("SELECT * FROM decks")
     fun getAllDecks(): Flow<List<Deck>>
 
